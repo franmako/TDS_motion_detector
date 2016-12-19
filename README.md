@@ -1,3 +1,3 @@
 # TDS_motion_detector
 Signal processing project for our 3rd year at EPHEC:
-python motion_detector.py -v video2.mp4
+python people_detect.py -v video5.mp4
