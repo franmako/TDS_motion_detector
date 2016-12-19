@@ -1,12 +1,3 @@
-### config.yml ###
-stream : video5.mp4
-minArea : 2000
-frameWidth : 500
-edgePercentage : 2
-cacheSize : 15
-display : 1
-
-### PeopleDetector.py ###
 #!/usr/bin/env python
 
 import sys
