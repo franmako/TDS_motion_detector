@@ -1,63 +1,135 @@
-import numpy as np
-import cv2
+#!/usr/bin/env python
+
+import sys
+import collections
 import argparse
-#import Personne
+import numpy
+import imutils
+import cv2
 
-ap = argparse.ArgumentParser()
-ap.add_argument("-v", "--video", help="path to the video file")
-ap.add_argument("-a", "--min-area", type=int, default=1800, help="minimum area size")
-args = vars(ap.parse_args())
+## --------------------------------------------------------------------------- #
+# Program initialization
+## --------------------------------------------------------------------------- #
+parser = argparse.ArgumentParser()
 
-if args.get("video", None) is None:
-	cap = cv2.VideoCapture(0)
-	time.sleep(0.25)
-else:
-	cap = cv2.VideoCapture(args["video"])
+parser.add_argument( "-v", "--video", help = "Path to video file" )
+parser.add_argument( "-a", "--min-area", type = int, default = 2000, help = "Minimum area size" )
 
-fgbg = cv2.BackgroundSubtractorMOG() #Create the background substractor
+args = vars( parser.parse_args() )
+video = args["video"]
+detectionThreshold = args["min_area"]
 
-kernelOp = np.ones((3,3),np.uint8)
-kernelCl = np.ones((11,11),np.uint8)
+try:
+    if video is None:
 
-#Variables
+        input = cv2.VideoCapture(0)
+
+    else:
+
+        input = cv2.VideoCapture(video)
+
+except cv2.error as e:
+
+    print "\nInvalid input detected. Exiting."
+    sys.exit(1)
+# ---------------------------------------------------------------------------- #
+
+## --------------------------------------------------------------------------- #
+# Program main function
+## --------------------------------------------------------------------------- #
+on = True
+
+frameWidth = 500
+edgePercentage = 5
+frameHeight = int(input.get(4) * (frameWidth / input.get(3)))
+leftEdge = (frameWidth / 100) * edgePercentage
+rightEdge = (frameWidth / 100) * (100 - edgePercentage)
+
+empty_room = None
+cptPeople = 0
+
+memory = 15
+persistence = collections.deque(memory * [0], memory)
+edgePersistence = collections.deque(memory * [0], memory)
+
+while on:
+
+    # Loop iteration initialization ------------------------------------------ #
+    (grabbed, frame) = input.read()
+    # Frame optimizations.
+    frame = imutils.resize(frame, width = frameWidth)
+    room = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    room = cv2.GaussianBlur(room, (21, 21), 0)
+
+    # If the empty room variable is empty, we're standing at the first video
+    # frame and we assign the room frame variable to the empty room variable.
+    if empty_room is None:
+
+        empty_room = room
+        continue
+    # ------------------------------------------------------------------------ #
 
 
-while(cap.isOpened()):
-    people = 0
-    ret, frame = cap.read() #read a frame
-    fgmask = fgbg.apply(frame) #Use the substractor
+    # Observes the differences between the empty room and the room as it is now.
+    frameDelta = cv2.absdiff(empty_room, room)
+    thresh = cv2.threshold(frameDelta, 25, 255, cv2.THRESH_BINARY )[1]
+    thresh = cv2.dilate(thresh, numpy.array([[0, 1, 0], [0, 1, 0], [0, 1, 0]], numpy.uint8), iterations = 15) # Image dilatation (~= hole filling).
 
-    try:
-        ret,imBin= cv2.threshold(fgmask,200,255,cv2.THRESH_BINARY)#Opening (erode->dilate) para quitar ruido.
-        mask = cv2.morphologyEx(imBin, cv2.MORPH_OPEN, kernelOp)#Closing (dilate -> erode) para juntar regiones blancas.
-        mask = cv2.morphologyEx(mask , cv2.MORPH_CLOSE, kernelCl)
-    except:
-        #if there are no more frames to show...
-        print('EOF')
-        break
+    # Objects analysis ------------------------------------------------------- #
+    (objects, _) = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    #_, contours0, hierarchy = cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_NONE)
-    (cnts, _) = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_NONE)
-    for cnt in cnts:
-        cv2.drawContours(frame, cnt, -1, (0,255,0), 3, 8)
-        area = cv2.contourArea(cnt)
-        if area > args["min_area"]:
-            people = people + 1
-            M = cv2.moments(cnt)
-            cx = int(M['m10']/M['m00'])
-            cy = int(M['m01']/M['m00'])
-            x,y,w,h = cv2.boundingRect(cnt)
-            cv2.circle(frame,(cx,cy), 5, (0,0,255), -1)
-            img = cv2.rectangle(frame,(x,y),(x+w,y+h),(0,255,0),2)
+    cv2.rectangle( frame, ((frameWidth/100) * edgePercentage, 0), ((frameWidth/100) * (100 - edgePercentage), frameHeight), (255, 0, 0), 2 )
 
-    cv2.putText(frame, "Personnes dans la salle d'attente: {}".format(people), (10, 20),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-    cv2.imshow("Camera - Salle d'attente",frame)
-    cv2.imshow("Thresh",mask)
+    if len(objects) != cptPeople:
 
-    #Abort and exit with 'Q' or ESC
-    k = cv2.waitKey(30) & 0xff
-    if k == 27:
-        break
+        cache = 0
+        edge = False
 
-cap.release() #release video file
-cv2.destroyAllWindows() #close all openCV windows
+        for o in objects:
+
+            # If the object is too small, we dismiss its study
+            if cv2.contourArea(o) < detectionThreshold:
+                continue
+
+            (x, y, w, h) = cv2.boundingRect(o)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+            # If the shift appeared within the center of the picture,
+            # it's a false positive
+
+            if x <  leftEdge or x + w < leftEdge or x > rightEdge or x + w > rightEdge:
+
+                edgePersistence.appendleft(True)
+
+            else:
+
+                edgePersistence.appendleft(False)
+
+            cache += 1
+
+        # If after analysing the objects, we still have a different counter,
+        # we modify the people counter.
+        persistence.appendleft(cache)
+
+        if persistence.count(cache) >= memory * 0.75 and cache > cptPeople:
+
+            cptPeople = cache
+
+        if edgePersistence.count(True) >= 1 and cache < cptPeople:
+
+            cptPeople = cache
+
+    # ------------------------------------------------------------------------ #
+
+    cv2.putText(frame, "Personnes dans la salle d'attente: {}".format(cptPeople), (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+    cv2.imshow("Salle d'attente - Camera", frame)
+    cv2.imshow("Salle d'attente - Thresh", thresh)
+
+    key = cv2.waitKey(1) & 0xFF
+    on = not (key == ord("q"))
+# ---------------------------------------------------------------------------- #
+
+input.release()
+cv2.destroyAllWindows()
+
+sys.exit(0)
