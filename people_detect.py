@@ -1,3 +1,12 @@
+### config.yml ###
+stream : video5.mp4
+minArea : 2000
+frameWidth : 500
+edgePercentage : 2
+cacheSize : 15
+display : 1
+
+### PeopleDetector.py ###
 #!/usr/bin/env python
 
 import sys
@@ -6,130 +15,151 @@ import argparse
 import numpy
 import imutils
 import cv2
+import yaml
 
-## --------------------------------------------------------------------------- #
-# Program initialization
-## --------------------------------------------------------------------------- #
-parser = argparse.ArgumentParser()
+class PeopleDetector:
 
-parser.add_argument( "-v", "--video", help = "Path to video file" )
-parser.add_argument( "-a", "--min-area", type = int, default = 2000, help = "Minimum area size" )
+    def __init__(self, config):
 
-args = vars( parser.parse_args() )
-video = args["video"]
-detectionThreshold = args["min_area"]
+        try:
 
-try:
-    if video is None:
+            self.on = True
+            self.empty_room = None
+            self.cptPeople = 0
 
-        input = cv2.VideoCapture(0)
+            self.detectionThreshold = config['minArea']
+            self.frameWidth = config['frameWidth']
+            self.edgePercentage = config['edgePercentage']
+            self.cacheSize = config['cacheSize']
+            self.display = config['display']
+            self.stream = cv2.VideoCapture(config['stream']) if 'stream' in config else cv2.VideoCapture(0)
 
-    else:
+            self.frameHeight = int(self.stream.get(4) * (self.frameWidth / self.stream.get(3)))
+            self.leftEdge = (self.frameWidth / 100) * self.edgePercentage
+            self.rightEdge = (self.frameWidth / 100) * (100 - self.edgePercentage)
 
-        input = cv2.VideoCapture(video)
+            self.motionPersistence = collections.deque(self.cacheSize * [0], self.cacheSize)
+            self.edgePersistence = collections.deque(self.cacheSize * [0], self.cacheSize)
 
-except cv2.error as e:
+        except cv2.error as e:
 
-    print "\nInvalid input detected. Exiting."
-    sys.exit(1)
-# ---------------------------------------------------------------------------- #
+            print "Invalid input detected. Exiting"
+            sys.exit(1)
 
-## --------------------------------------------------------------------------- #
-# Program main function
-## --------------------------------------------------------------------------- #
-on = True
+        except KeyError as e:
 
-frameWidth = 500
-edgePercentage = 5
-frameHeight = int(input.get(4) * (frameWidth / input.get(3)))
-leftEdge = (frameWidth / 100) * edgePercentage
-rightEdge = (frameWidth / 100) * (100 - edgePercentage)
+            print 'Missing parameter in configuration file. Exiting'
+            sys.exit(1)
 
-empty_room = None
-cptPeople = 0
+    def optimize(self):
 
-memory = 15
-persistence = collections.deque(memory * [0], memory)
-edgePersistence = collections.deque(memory * [0], memory)
+        self.frame = imutils.resize(self.frame, width = self.frameWidth)
+        self.room = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY)
+        self.room = cv2.GaussianBlur(self.room, (21, 21), 0)
 
-while on:
+    def computeDelta(self):
 
-    # Loop iteration initialization ------------------------------------------ #
-    (grabbed, frame) = input.read()
-    # Frame optimizations.
-    frame = imutils.resize(frame, width = frameWidth)
-    room = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    room = cv2.GaussianBlur(room, (21, 21), 0)
+        self.frameDelta = cv2.absdiff(self.empty_room, self.room)
+        self.thresh = cv2.threshold(self.frameDelta, 25, 255, cv2.THRESH_BINARY)[1]
+        kernel = numpy.array([[0, 1, 0], [0, 1, 0], [0, 1, 0]], numpy.uint8)
+        self.thresh = cv2.dilate(self.thresh, kernel, iterations = 15)
 
-    # If the empty room variable is empty, we're standing at the first video
-    # frame and we assign the room frame variable to the empty room variable.
-    if empty_room is None:
+    def analyze(self):
 
-        empty_room = room
-        continue
-    # ------------------------------------------------------------------------ #
+        (self.objects, _) = cv2.findContours(self.thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+        if len(self.objects) != self.cptPeople:
 
-    # Observes the differences between the empty room and the room as it is now.
-    frameDelta = cv2.absdiff(empty_room, room)
-    thresh = cv2.threshold(frameDelta, 25, 255, cv2.THRESH_BINARY )[1]
-    thresh = cv2.dilate(thresh, numpy.array([[0, 1, 0], [0, 1, 0], [0, 1, 0]], numpy.uint8), iterations = 15) # Image dilatation (~= hole filling).
+            self.cache = 0
 
-    # Objects analysis ------------------------------------------------------- #
-    (objects, _) = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for o in self.objects:
 
-    cv2.rectangle( frame, ((frameWidth/100) * edgePercentage, 0), ((frameWidth/100) * (100 - edgePercentage), frameHeight), (255, 0, 0), 2 )
+                if cv2.contourArea(o) < self.detectionThreshold:
 
-    if len(objects) != cptPeople:
+                    continue
 
-        cache = 0
-        edge = False
+                self.filter(o)
+                self.cache += 1
 
-        for o in objects:
+            self.motionPersistence.appendleft(self.cache)
+            self.update()
 
-            # If the object is too small, we dismiss its study
-            if cv2.contourArea(o) < detectionThreshold:
+    def filter(self, obj):
+
+        (x, y, w, h) = cv2.boundingRect(obj)
+        cv2.rectangle(self.frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+        if x <  self.leftEdge or x + w < self.leftEdge or x > self.rightEdge or x + w > self.rightEdge:
+
+            self.edgePersistence.appendleft(True)
+
+        else:
+
+            self.edgePersistence.appendleft(False)
+
+    def update(self):
+
+        if self.motionPersistence.count(self.cache) >= self.cacheSize * 0.75 and self.cache > self.cptPeople:
+
+            self.cptPeople = self.cache
+
+        if self.edgePersistence.count(True) >= 1 and self.cache < self.cptPeople:
+
+            self.cptPeople = self.cache
+
+    def render(self):
+
+        cv2.rectangle(self.frame, (self.leftEdge, 0), (self.rightEdge, self.frameHeight), (255, 0, 0), 2)
+        cv2.putText(self.frame, "Personnes dans la salle d'attente: {}".format(self.cptPeople), (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        cv2.imshow("Salle d'attente - Camera", self.frame)
+        cv2.imshow("Salle d'attente - Thresh", self.thresh)
+
+    def run(self):
+
+        while self.on:
+
+            (self.grabbed, self.frame) = self.stream.read()
+
+            if not self.grabbed:
+
+                break
+
+            self.optimize()
+
+            if self.empty_room is None:
+
+                self.empty_room = self.room
                 continue
 
-            (x, y, w, h) = cv2.boundingRect(o)
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            self.computeDelta()
+            self.analyze()
+            self.render()
 
-            # If the shift appeared within the center of the picture,
-            # it's a false positive
+            key = cv2.waitKey(1) & 0xFF
+            self.on = not (key == ord("q"))
 
-            if x <  leftEdge or x + w < leftEdge or x > rightEdge or x + w > rightEdge:
+        self.stream.release()
+        cv2.destroyAllWindows()
 
-                edgePersistence.appendleft(True)
+        sys.exit(0)
 
-            else:
+def main():
 
-                edgePersistence.appendleft(False)
+    try:
 
-            cache += 1
+        with open('config.yml', 'r') as yml:
 
-        # If after analysing the objects, we still have a different counter,
-        # we modify the people counter.
-        persistence.appendleft(cache)
+            config = yaml.load(yml)
 
-        if persistence.count(cache) >= memory * 0.75 and cache > cptPeople:
+    except IOError as e:
 
-            cptPeople = cache
+            print("Error while opening config file : " + str(e))
+            sys.exit(1)
 
-        if edgePersistence.count(True) >= 1 and cache < cptPeople:
+    detector = PeopleDetector(config)
+    detector.run()
 
-            cptPeople = cache
 
-    # ------------------------------------------------------------------------ #
+if __name__ == "__main__":
 
-    cv2.putText(frame, "Personnes dans la salle d'attente: {}".format(cptPeople), (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-    cv2.imshow("Salle d'attente - Camera", frame)
-    cv2.imshow("Salle d'attente - Thresh", thresh)
-
-    key = cv2.waitKey(1) & 0xFF
-    on = not (key == ord("q"))
-# ---------------------------------------------------------------------------- #
-
-input.release()
-cv2.destroyAllWindows()
-
-sys.exit(0)
+    main()
