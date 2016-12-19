@@ -52,6 +52,7 @@ while(cap.isOpened()):
 
     cv2.putText(frame, "Personnes dans la salle d'attente: {}".format(people), (10, 20),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
     cv2.imshow("Camera - Salle d'attente",frame)
+    cv2.imshow("Thresh",mask)
 
     #Abort and exit with 'Q' or ESC
     k = cv2.waitKey(30) & 0xff

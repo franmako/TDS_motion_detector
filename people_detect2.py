@@ -104,6 +104,7 @@ while on:
 
     cv2.putText(frame, "Personnes dans la salle d'attente: {}".format(cptPeople), (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
     cv2.imshow("Salle d'attente - Camera", frame)
+    cv2.imshow("Salle d'attente - Thresh", thresh)
 
     key = cv2.waitKey(1) & 0xFF
     on = not ( key == ord("q") )
